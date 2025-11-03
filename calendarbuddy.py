@@ -60,6 +60,11 @@ TIME_RANGE_RE = re.compile(
     r"(?:(\d{4}-\d{2}-\d{2})\s+)?(\d{1,2}:\d{2}(?:\s*[APMapm\.]{2,4})?)\s*-\s*(\d{1,2}:\d{2}(?:\s*[APMapm\.]{2,4})?)",
     re.IGNORECASE
 )
+# time-range with "at" keyword like "2025-11-02 at 11:30 AM - 12:00 PM"
+TIME_RANGE_AT_RE = re.compile(
+    r"(\d{4}-\d{2}-\d{2})\s+at\s+(\d{1,2}:\d{2}(?:\s*[APMapm\.]{2,4})?)\s*-\s*(\d{1,2}:\d{2}(?:\s*[APMapm\.]{2,4})?)",
+    re.IGNORECASE
+)
 
 URL_RE = re.compile(r"https?://[^\s'\")<>]+", re.IGNORECASE)
 MEETING_DOMAINS_PRIORITY = [
@@ -103,13 +108,22 @@ def normalize_spaces(s: str) -> str:
     s = re.sub(r"[ \t\r\f\v]+", " ", s)
     return s
 
-def run_icalbuddy(write_raw=False):
+def run_icalbuddy(write_raw=False, lookback_days=0):
     """
     Call icalBuddy with absolute date/time (no relative dates) and return normalized lines.
-    Uses the two-arg form for range: ["icalBuddy","-nrd","-df","%Y-%m-%d","-tf","%I:%M %p","eventsFrom:today","to:today"]
-    Falls back to eventsToday if needed.
+    Uses the two-arg form for range with lookback support.
+    
+    Args:
+        write_raw: Whether to write raw output to file for debugging
+        lookback_days: Number of days to look back from today (0 = today only)
     """
-    cmd = ["icalBuddy", "-nrd", "-df", "%Y-%m-%d", "-tf", "%I:%M %p", "eventsFrom:today", "to:today"]
+    today = date.today()
+    start_date = today - timedelta(days=lookback_days)
+    
+    start_str = start_date.strftime("%Y-%m-%d")
+    end_str = today.strftime("%Y-%m-%d")
+    
+    cmd = ["icalBuddy", "-nrd", "-df", "%Y-%m-%d", "-tf", "%I:%M %p", f"eventsFrom:{start_str}", f"to:{end_str}"]
     try:
         rc = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
     except subprocess.TimeoutExpired:
@@ -117,16 +131,16 @@ def run_icalbuddy(write_raw=False):
     except FileNotFoundError:
         raise SystemExit("icalBuddy not found. Install with: brew install ical-buddy")
     
-    used = "eventsFrom:today to:today"
+    used = f"eventsFrom:{start_str} to:{end_str}"
     if rc.returncode != 0 or not rc.stdout.strip():
-        # fallback
+        # fallback to today only if range fails
         cmd2 = ["icalBuddy", "-nrd", "-df", "%Y-%m-%d", "-tf", "%I:%M %p", "eventsToday"]
         try:
             rc = subprocess.run(cmd2, capture_output=True, text=True, timeout=30)
         except subprocess.TimeoutExpired:
             raise SystemExit("icalBuddy command timed out after 30 seconds")
         
-        used = "eventsToday"
+        used = "eventsToday (fallback)"
         if rc.returncode != 0:
             raise SystemExit(f"icalBuddy failed: {rc.stderr.strip()}")
     
@@ -251,6 +265,21 @@ def parse_events(lines):
                     cur_end = f"{e_iso}T23:59:59"
                     continue
 
+            # Check for "YYYY-MM-DD at HH:MM AM/PM - HH:MM AM/PM" format first
+            mt_at = TIME_RANGE_AT_RE.search(line)
+            if mt_at:
+                date_prefix = mt_at.group(1)
+                t1 = mt_at.group(2)
+                t2 = mt_at.group(3)
+                date_iso = try_parse_date_to_iso(date_prefix)
+                h1, m1 = parse_time_with_optional_am_pm(t1)
+                h2, m2 = parse_time_with_optional_am_pm(t2)
+                if date_iso and h1 is not None and h2 is not None:
+                    cur_start = to_iso_datetime_str(date_iso, h1, m1)
+                    cur_end = to_iso_datetime_str(date_iso, h2, m2)
+                    continue
+
+            # Check for regular time range format
             mt = TIME_RANGE_RE.search(line)
             if mt:
                 date_prefix = mt.group(1)
@@ -357,9 +386,10 @@ def uid_for(title, start_time, end_time):
     raw = (title or "") + "||" + (start_time or "") + "||" + (end_time or "")
     return hashlib.sha1(raw.encode("utf-8")).hexdigest()
 
-def process_and_sync(events, conn, dry_run=False):
+def process_and_sync(events, conn, dry_run=False, lookback_mode=False):
     """
     events: list of (title, start_time_iso, end_time_iso, meeting_link)
+    lookback_mode: if True, don't mark events as removed (since we're not syncing all current events)
     """
     now = datetime.now().isoformat()
     db_map = load_db_map(conn)
@@ -368,37 +398,44 @@ def process_and_sync(events, conn, dry_run=False):
     for title, s_iso, e_iso, mlink in events:
         uid = uid_for(title, s_iso, e_iso)
         current_uids.add(uid)
+        
         if uid in db_map:
+            # Event already exists, just update last_seen and ensure it's not deleted
             if not dry_run:
                 conn.execute("UPDATE events SET last_seen=?, deleted=0, meeting_link=? WHERE uid=?", (now, mlink, uid))
         else:
-            # check existing records with same title (active) -> treat as update if times differ
+            # New event - check for existing records with same title (active) -> treat as update if times differ
             existing_same_title = [r for r in db_map.values() if r["title"] == title and r["deleted"] == 0]
             if existing_same_title:
                 for old in existing_same_title:
                     if not dry_run:
                         conn.execute("UPDATE events SET deleted=1, last_seen=? WHERE uid=?", (now, old["uid"]))
                         record_change(conn, "updated-old-marked-deleted", old["uid"], old["title"], old["start_time"], old["end_time"], old.get("meeting_link"))
+                
+                # Use INSERT OR REPLACE to handle potential constraint violations
                 if not dry_run:
                     conn.execute(
-                        "INSERT INTO events (uid, title, start_time, end_time, first_seen, last_seen, deleted, meeting_link) VALUES (?, ?, ?, ?, ?, ?, 0, ?)",
+                        "INSERT OR REPLACE INTO events (uid, title, start_time, end_time, first_seen, last_seen, deleted, meeting_link) VALUES (?, ?, ?, ?, ?, ?, 0, ?)",
                         (uid, title, s_iso, e_iso, now, now, mlink),
                     )
                     record_change(conn, "added (updated)", uid, title, s_iso, e_iso, mlink)
             else:
+                # Completely new event - use INSERT OR REPLACE to be safe
                 if not dry_run:
                     conn.execute(
-                        "INSERT INTO events (uid, title, start_time, end_time, first_seen, last_seen, deleted, meeting_link) VALUES (?, ?, ?, ?, ?, ?, 0, ?)",
+                        "INSERT OR REPLACE INTO events (uid, title, start_time, end_time, first_seen, last_seen, deleted, meeting_link) VALUES (?, ?, ?, ?, ?, ?, 0, ?)",
                         (uid, title, s_iso, e_iso, now, now, mlink),
                     )
                     record_change(conn, "added", uid, title, s_iso, e_iso, mlink)
 
-    # mark removed events
-    for uid, row in db_map.items():
-        if row["deleted"] == 0 and uid not in current_uids:
-            if not dry_run:
-                conn.execute("UPDATE events SET deleted=1, last_seen=? WHERE uid=?", (now, uid))
-                record_change(conn, "removed", uid, row["title"], row["start_time"], row["end_time"], row.get("meeting_link"))
+    # Only mark events as removed if we're not in lookback mode
+    # In lookback mode, we're syncing historical events, not current state
+    if not lookback_mode:
+        for uid, row in db_map.items():
+            if row["deleted"] == 0 and uid not in current_uids:
+                if not dry_run:
+                    conn.execute("UPDATE events SET deleted=1, last_seen=? WHERE uid=?", (now, uid))
+                    record_change(conn, "removed", uid, row["title"], row["start_time"], row["end_time"], row.get("meeting_link"))
 
     if not dry_run:
         conn.commit()
@@ -544,19 +581,25 @@ def validate_iso_date(s):
 def main():
     epilog = f"""
 Examples:
-  Sync (typically run by cron):
+  Sync today only (typically run by cron):
     ./calendarbuddy.py
 
-  Print today's current events:
-    ./calendarbuddy.py --print-current --format table
+  Sync with 7-day lookback:
+    ./calendarbuddy.py --lookback 7
 
-  Print events for a single date:
-    ./calendarbuddy.py --print-current --date 2025-10-21 --format table
+  Sync with 30-day lookback:
+    ./calendarbuddy.py --lookback 30
 
-  Print events overlapping a date range:
-    ./calendarbuddy.py --print-current --from 2025-10-01 --to 2025-10-31 --format json
+  View today's events:
+    ./calendarbuddy.py --view --format table
 
-  Print changes in the last 6 hours:
+  View events for a single date:
+    ./calendarbuddy.py --view --date 2025-10-21 --format table
+
+  View events in a date range:
+    ./calendarbuddy.py --view --from 2025-10-01 --to 2025-10-31 --format json
+
+  View changes in the last 6 hours:
     ./calendarbuddy.py --print-changes --since 6h --format table
 
 DB file: {DB_PATH}
@@ -564,7 +607,8 @@ CalendarBuddy v{VERSION} - https://github.com/yourusername/CalendarBuddy
 """
     p = argparse.ArgumentParser(description="Sync macOS Calendar (icalBuddy) to SQLite and print in table/json/csv formats.", epilog=epilog, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--version", action="version", version=f"CalendarBuddy {VERSION}")
-    p.add_argument("--print-current", action="store_true", help="Print active (non-deleted) events and exit.")
+    p.add_argument("--view", action="store_true", help="View active (non-deleted) events and exit.")
+    p.add_argument("--print-current", action="store_true", help=argparse.SUPPRESS)  # Hidden backward compatibility
     p.add_argument("--date", help="(YYYY-MM-DD) Show events for a specific date. Mutually exclusive with --from/--to.")
     p.add_argument("--from", dest="from_date", help="(YYYY-MM-DD) Start date for range filter (inclusive).")
     p.add_argument("--to", dest="to_date", help="(YYYY-MM-DD) End date for range filter (inclusive).")
@@ -573,6 +617,7 @@ CalendarBuddy v{VERSION} - https://github.com/yourusername/CalendarBuddy
     p.add_argument("--since", help="Filter changes since ISO timestamp or '<Nh' (hours). Only for --print-changes.")
     p.add_argument("--show-db", action="store_true", help="Debug: dump raw DB rows.")
     p.add_argument("--dry-run", action="store_true", help="Run sync logic but don't write DB/changes (useful for testing).")
+    p.add_argument("--lookback", type=int, default=0, help="Number of days to look back from today for syncing (default: 0, today only).")
     args = p.parse_args()
 
     # validate mutually exclusive usage
@@ -592,14 +637,18 @@ CalendarBuddy v{VERSION} - https://github.com/yourusername/CalendarBuddy
     conn = sqlite3.connect(str(DB_PATH))
     init_db(conn)
 
+    # Handle backward compatibility
+    if args.print_current:
+        args.view = True
+    
     # Print / debug modes (do not sync)
-    if args.print_current or args.print_changes or args.show_db:
+    if args.view or args.print_changes or args.show_db:
         if args.show_db:
             show_db(conn)
             conn.close()
             return
 
-        if args.print_current:
+        if args.view:
             # determine filter
             if args.date:
                 rows = events_on_date_query(conn, args.date)
@@ -641,20 +690,23 @@ CalendarBuddy v{VERSION} - https://github.com/yourusername/CalendarBuddy
 
     # Default: fetch and sync
     try:
-        raw_lines = run_icalbuddy(write_raw=True)
+        raw_lines = run_icalbuddy(write_raw=True, lookback_days=args.lookback)
     except SystemExit as e:
         print("Error running icalBuddy:", e, file=sys.stderr)
         conn.close()
         sys.exit(1)
 
     events = parse_events(raw_lines)
-    process_and_sync(events, conn, dry_run=args.dry_run)
+    lookback_mode = args.lookback > 0
+    process_and_sync(events, conn, dry_run=args.dry_run, lookback_mode=lookback_mode)
     conn.close()
     
     if args.dry_run:
-        print(f"DRY RUN: Would have processed {len(events)} events. DB at: {DB_PATH}")
+        lookback_msg = f" (lookback: {args.lookback} days)" if args.lookback > 0 else ""
+        print(f"DRY RUN: Would have processed {len(events)} events{lookback_msg}. DB at: {DB_PATH}")
     else:
-        print(f"Processed {len(events)} events. DB stored at: {DB_PATH}")
+        lookback_msg = f" (lookback: {args.lookback} days)" if args.lookback > 0 else ""
+        print(f"Processed {len(events)} events{lookback_msg}. DB stored at: {DB_PATH}")
 
 if __name__ == "__main__":
     main()

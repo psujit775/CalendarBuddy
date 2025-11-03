@@ -33,7 +33,7 @@ fi
 
 # Get today's events
 TODAY=$(date +%Y-%m-%d)
-EVENTS_JSON=$($CALENDARBUDDY --print-current --date $TODAY --format json)
+EVENTS_JSON=$($CALENDARBUDDY --view --date $TODAY --format json)
 
 # Check if we have events
 if [[ "$EVENTS_JSON" == "[]" ]]; then

@@ -128,8 +128,8 @@ echo
 echo -e "${GREEN}🎉 Setup Complete!${NC}"
 echo
 echo -e "${BLUE}Quick Start Commands:${NC}"
-echo "  View today's events:     $INSTALL_PATH --print-current"
-echo "  View specific date:      $INSTALL_PATH --print-current --date 2025-12-25"
+echo "  View today's events:     $INSTALL_PATH --view"
+echo "  View specific date:      $INSTALL_PATH --view --date 2025-12-25"
 echo "  View recent changes:     $INSTALL_PATH --print-changes --since 24h"
 echo "  Manual sync:             $INSTALL_PATH"
 echo "  Get help:                $INSTALL_PATH --help"

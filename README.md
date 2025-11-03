@@ -72,14 +72,17 @@ mv calendarbuddy.py ~/calendarbuddy.py
 ## Quick Start
 
 ```bash
-# Sync calendar events (run this first)
+# Initial sync with historical data (recommended first run)
+~/calendarbuddy.py --lookback 30
+
+# Daily sync (run this regularly via cron)
 ~/calendarbuddy.py
 
 # View today's events
-~/calendarbuddy.py --print-current
+~/calendarbuddy.py --view
 
 # View events for a specific date
-~/calendarbuddy.py --print-current --date 2025-10-15
+~/calendarbuddy.py --view --date 2025-10-15
 
 # View recent changes
 ~/calendarbuddy.py --print-changes --since 24h
@@ -88,21 +91,27 @@ mv calendarbuddy.py ~/calendarbuddy.py
 ## Use Cases & Examples
 
 ### 🔄 Automated Calendar Sync
-Set up automatic syncing every 15 minutes:
+Set up automatic syncing with optimal performance:
 ```bash
-# Add to crontab (crontab -e)
-*/15 * * * * /usr/bin/python3 /Users/psujit775/calendarbuddy.py >> /tmp/calendar-sync.log 2>&1
+# Primary sync: every 30 minutes (default lookback 0 = today only, fast)
+*/30 * * * * /usr/bin/python3 /path/to/calendarbuddy.py >> /tmp/calendar-sync.log 2>&1
+
+# Weekly maintenance: catch retroactive changes (Sundays at 6 AM)
+0 6 * * 0 /usr/bin/python3 /path/to/calendarbuddy.py --lookback 7 >> /tmp/calendar-sync.log 2>&1
+
+# Optional: monthly deep sync for thoroughness (1st of month at 2 AM)
+0 2 1 * * /usr/bin/python3 /path/to/calendarbuddy.py --lookback 30 >> /tmp/calendar-sync.log 2>&1
 ```
 
-**Why useful:** Never manually track calendar changes again. Perfect for busy professionals who need reliable event tracking.
+**Why this setup:** The default behavior (lookback 0) is optimized for frequent syncing - it's fast and efficient. Weekly lookback catches retroactive changes without impacting daily performance.
 
 ### 📊 Meeting Analytics & Reports
 ```bash
 # Export this month's meetings to analyze patterns
-~/calendarbuddy.py --print-current --from 2025-09-01 --to 2025-09-30 --format csv > september_meetings.csv
+~/calendarbuddy.py --view --from 2025-09-01 --to 2025-09-30 --format csv > september_meetings.csv
 
 # Track meeting frequency by extracting meeting links
-~/calendarbuddy.py --print-current --format json | jq '.[] | select(.meeting_link != null)'
+~/calendarbuddy.py --view --format json | jq '.[] | select(.meeting_link != null)'
 ```
 
 **Use case:** consultants billing clients, or personal productivity analysis.
@@ -127,17 +136,17 @@ Set up automatic syncing every 15 minutes:
 # - Install third-party Slack app → IT approval → Rejected
 
 # CalendarBuddy approach (works everywhere):
-~/calendarbuddy.py --print-current --format json | jq '.[]'
+~/calendarbuddy.py --view --format json | jq '.[]'
 # Uses local macOS Calendar (already approved) + local processing only
 ```
 
 #### Silent Automation for Restricted Environments
 ```bash
 # Morning briefing (no external APIs)
-~/calendarbuddy.py --print-current --date $(date +%Y-%m-%d) --format table
+~/calendarbuddy.py --view --date $(date +%Y-%m-%d) --format table
 
 # Export for compliance reporting (stays local)
-~/calendarbuddy.py --print-current --from 2025-09-01 --to 2025-09-30 --format csv > monthly_meetings.csv
+~/calendarbuddy.py --view --from 2025-09-01 --to 2025-09-30 --format csv > monthly_meetings.csv
 ```
 
 ### 🤖 Integration with Other Tools
@@ -146,7 +155,7 @@ Set up automatic syncing every 15 minutes:
 ```bash
 #!/bin/bash
 # notify-next-meeting.sh
-NEXT_MEETING=$(~/calendarbuddy.py --print-current --date $(date +%Y-%m-%d) --format json | jq -r '.[0] | "\(.title) at \(.start_time)"')
+NEXT_MEETING=$(~/calendarbuddy.py --view --date $(date +%Y-%m-%d) --format json | jq -r '.[0] | "\(.title) at \(.start_time)"')
 curl -X POST -H 'Content-type: application/json' \
   --data "{\"text\":\"Next meeting: $NEXT_MEETING\"}" \
   YOUR_SLACK_WEBHOOK_URL
@@ -159,19 +168,19 @@ curl -X POST -H 'Content-type: application/json' \
 #!/bin/bash
 # daily-prep.sh
 echo "=== TODAY'S SCHEDULE ==="
-~/calendarbuddy.py --print-current --date $(date +%Y-%m-%d) --format table
+~/calendarbuddy.py --view --date $(date +%Y-%m-%d) --format table
 
 echo -e "\n=== RECENT CHANGES ==="
 ~/calendarbuddy.py --print-changes --since 24h --format table
 
 echo -e "\n=== TOMORROW'S PREP ==="
-~/calendarbuddy.py --print-current --date $(date -j -v+1d +%Y-%m-%d) --format table
+~/calendarbuddy.py --view --date $(date -j -v+1d +%Y-%m-%d) --format table
 ```
 
 #### Weekly Review
 ```bash
 # Generate weekly meeting summary
-~/calendarbuddy.py --print-current \
+~/calendarbuddy.py --view \
   --from $(date -j -v-7d +%Y-%m-%d) \
   --to $(date +%Y-%m-%d) \
   --format csv > this_week_meetings.csv
@@ -182,50 +191,83 @@ echo -e "\n=== TOMORROW'S PREP ==="
 #### Command Line Calendar Dashboard
 ```bash
 # One-liner daily brief
-~/calendarbuddy.py --print-current --date $(date +%Y-%m-%d) --format table && echo "---" && ~/calendarbuddy.py --print-changes --since 24h --format table
+~/calendarbuddy.py --view --date $(date +%Y-%m-%d) --format table && echo "---" && ~/calendarbuddy.py --print-changes --since 24h --format table
 ```
 
 #### Pipe-Friendly Data Processing
 ```bash
 # Count meetings per day this week
-~/calendarbuddy.py --print-current --from $(date -j -v-mon +%Y-%m-%d) --to $(date -j -v+sun +%Y-%m-%d) --format csv | \
+~/calendarbuddy.py --view --from $(date -j -v-mon +%Y-%m-%d) --to $(date -j -v+sun +%Y-%m-%d) --format csv | \
   tail -n +2 | cut -d',' -f2 | cut -d'T' -f1 | sort | uniq -c
 
 # Show event title + meeting link for easier identification
-~/calendarbuddy.py --print-current --format json | jq -r '.[] | select(.meeting_link != null) | "\(.title): \(.meeting_link)"'
+~/calendarbuddy.py --view --format json | jq -r '.[] | select(.meeting_link != null) | "\(.title): \(.meeting_link)"'
 ```
 
 #### Terminal Aliases for Daily Use
 ```bash
 # Add to your .bashrc/.zshrc
-alias today="calendarbuddy.py --print-current --date "$(date +%Y-%m-%d)" --format table"
-alias tomorrow="calendarbuddy.py --print-current --date "$(date -j -v+1d +%Y-%m-%d)" --format table"
+alias today="calendarbuddy.py --view --date "$(date +%Y-%m-%d)" --format table"
+alias tomorrow="calendarbuddy.py --view --date "$(date -j -v+1d +%Y-%m-%d)" --format table"
 ```
 
 ## Command Reference
 
 ### Basic Operations
 ```bash
-# Sync calendar (default behavior)
+# Sync calendar (default: today only, lookback 0)
 calendarbuddy.py
 
+# Sync with lookback period (sync last 7 days)
+calendarbuddy.py --lookback 7
+
+# Sync with 30-day lookback (great for initial setup)
+calendarbuddy.py --lookback 30
+
 # Dry run (test without writing to database)
-calendarbuddy.py --dry-run
+calendarbuddy.py --dry-run --lookback 7
 ```
 
-### Viewing Current Events
+### Lookback Period Configuration
 ```bash
-# Today's events
-calendarbuddy.py --print-current
+# Default behavior (lookback 0 = today only)
+calendarbuddy.py                    # Syncs today's events only
+
+# Historical sync options
+calendarbuddy.py --lookback 1       # Yesterday + today
+calendarbuddy.py --lookback 7       # Last 7 days (recommended for weekly maintenance)
+calendarbuddy.py --lookback 30      # Last 30 days (good for initial setup)
+
+# Test before running
+calendarbuddy.py --dry-run --lookback 14
+```
+
+### Viewing Events
+```bash
+# Today's events (default)
+calendarbuddy.py --view
 
 # Specific date
-calendarbuddy.py --print-current --date 2025-12-25
+calendarbuddy.py --view --date 2025-12-25
 
 # Date range
-calendarbuddy.py --print-current --from 2025-10-01 --to 2025-10-31
+calendarbuddy.py --view --from 2025-10-01 --to 2025-10-31
 
 # All events in database
-calendarbuddy.py --print-current --from 1900-01-01 --to 2100-01-01
+calendarbuddy.py --view --from 1900-01-01 --to 2100-01-01
+```
+
+### Sync Operations
+```bash
+# Basic sync (default: lookback 0, today only)
+calendarbuddy.py
+
+# Sync with historical data
+calendarbuddy.py --lookback 7       # Last 7 days
+calendarbuddy.py --lookback 30      # Last 30 days
+
+# Test sync without writing to database
+calendarbuddy.py --dry-run --lookback 14
 ```
 
 ### Viewing Change History
@@ -243,13 +285,13 @@ calendarbuddy.py --print-changes --since 2025-09-20T10:00:00
 ### Output Formats
 ```bash
 # Table format (default, human-readable)
-calendarbuddy.py --print-current --format table
+calendarbuddy.py --view --format table
 
 # JSON (for scripting/APIs)
-calendarbuddy.py --print-current --format json
+calendarbuddy.py --view --format json
 
 # CSV (for spreadsheets/analysis)
-calendarbuddy.py --print-current --format csv
+calendarbuddy.py --view --format csv
 ```
 
 ## Data Storage
@@ -285,7 +327,79 @@ CREATE TABLE changes (
 );
 ```
 
-## Advanced Configuration
+## Configuration & Best Practices
+
+### Default Settings
+CalendarBuddy uses these defaults out of the box:
+- **Lookback period:** 0 days (today only)
+- **Output format:** table (human-readable)
+- **Database location:** `~/.calendar_events.db`
+- **Sync behavior:** Fetch and update database
+
+### Recommended Setup
+
+**1. Initial Setup (one-time):**
+```bash
+# Populate database with historical events
+~/calendarbuddy.py --lookback 30
+```
+
+**2. Daily Automation (cron):**
+```bash
+# Add to crontab (crontab -e) - sync every 30 minutes
+*/30 * * * * /usr/bin/python3 /Users/username/calendarbuddy.py >> /tmp/calendar-sync.log 2>&1
+```
+
+**3. Weekly Maintenance (optional but recommended):**
+```bash
+# Add to crontab - catch retroactive changes every Sunday at 6 AM
+0 6 * * 0 /usr/bin/python3 /Users/username/calendarbuddy.py --lookback 7 >> /tmp/calendar-sync.log 2>&1
+```
+
+### Lookback Period for Historical Sync
+
+The `--lookback` option allows you to sync events from previous days, which is essential for:
+
+**Initial Setup:**
+```bash
+# Sync last 30 days when first setting up
+~/calendarbuddy.py --lookback 30
+```
+
+**Catching Retroactive Changes:**
+```bash
+# Weekly sync with 7-day lookback to catch late additions/modifications
+~/calendarbuddy.py --lookback 7
+```
+
+**Default Behavior:**
+- **Default lookback:** 0 days (today only)
+- **Recommended for cron:** Keep default (0) for daily automation
+- **Weekly maintenance:** Use `--lookback 7` to catch retroactive changes
+- **Initial setup:** Use `--lookback 30` to populate historical data
+
+**Use Cases:**
+- **Initial database population:** Get your historical events
+- **Retroactive event additions:** Catch events added to past dates  
+- **Meeting modifications:** Detect changes to historical meetings
+- **Vacation catch-up:** Sync events that were added while you were away
+
+**Performance Notes:**
+- Larger lookback periods take longer to process
+- icalBuddy may timeout on very large date ranges (30+ days)
+- Consider breaking large syncs into smaller chunks if needed
+
+**Recommended Configuration:**
+```bash
+# Daily cron job (fast, efficient)
+*/30 * * * * /usr/bin/python3 /Users/username/calendarbuddy.py
+
+# Weekly maintenance (catch retroactive changes)
+0 6 * * 0 /usr/bin/python3 /Users/username/calendarbuddy.py --lookback 7
+
+# Monthly deep sync (optional, for thoroughness)
+0 2 1 * * /usr/bin/python3 /Users/username/calendarbuddy.py --lookback 30
+```
 
 ### Custom Meeting Domains
 Edit the script to prioritize your organization's meeting platforms:

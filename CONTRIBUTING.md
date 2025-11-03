@@ -70,7 +70,7 @@ chmod +x calendarbuddy-dev.py
 ./calendarbuddy-dev.py --dry-run
 
 # Test parsing with current calendar
-./calendarbuddy-dev.py --print-current --format json
+./calendarbuddy-dev.py --view --format json
 
 # Test change tracking
 ./calendarbuddy-dev.py  # First run
