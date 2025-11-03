@@ -48,7 +48,7 @@ import sys
 
 HOME = Path.home()
 DB_PATH = HOME / ".calendar_events.db"
-VERSION = "1.0.0"
+VERSION = "2.0.0"
 
 # Patterns
 BULLET_PREFIX = re.compile(r"^\s*[•\*]\s*")  # accept only • and * as title bullets
