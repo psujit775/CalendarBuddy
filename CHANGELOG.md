@@ -33,7 +33,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Documentation
 - Updated all examples to use `--view` instead of `--print-current`
 - Added comprehensive automation recommendations with cron examples
-- Enhanced steering documentation for developers
 - Clear migration guidelines for existing users
 
 ### Backward Compatibility
