@@ -2,7 +2,7 @@
 """
 CalendarBuddy - Sync macOS Calendar to SQLite with change tracking
 
-Copyright (C) 2025 [Your Name]
+Copyright (C) 2025 Sujit Patel
 
 This program is free software: you can redistribute it and/or modify
 it under the terms of the GNU General Public License as published by
